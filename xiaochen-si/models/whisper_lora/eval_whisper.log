@@ -1,0 +1,27 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+`generation_config` default values have been modified to match model-specific defaults: {'suppress_tokens': [], 'begin_suppress_tokens': [220, 50257]}. If this is not desired, please set these values explicitly.
+The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+A custom logits processor of type <class 'transformers.generation.logits_process.SuppressTokensLogitsProcessor'> has been passed to `.generate()`, but it was also created in `.generate()`, given its parameterization. The custom <class 'transformers.generation.logits_process.SuppressTokensLogitsProcessor'> will take precedence. Please check the docstring of <class 'transformers.generation.logits_process.SuppressTokensLogitsProcessor'> to see related `.generate()` flags.
+A custom logits processor of type <class 'transformers.generation.logits_process.SuppressTokensAtBeginLogitsProcessor'> has been passed to `.generate()`, but it was also created in `.generate()`, given its parameterization. The custom <class 'transformers.generation.logits_process.SuppressTokensAtBeginLogitsProcessor'> will take precedence. Please check the docstring of <class 'transformers.generation.logits_process.SuppressTokensAtBeginLogitsProcessor'> to see related `.generate()` flags.
+  100/500
+  200/500
+  300/500
+  400/500
+  500/500
+
+WER on 500 val samples: 0.1613
+  REF:  so elephant
+  PRED: some elephant
+
+  REF:  they both eat they both eat like leaves
+  PRED: they both eat they both eat like leaves
+
+  REF:  five
+  PRED: bye
+
+  REF:  um there's a boy
+  PRED: um there's a boy
+
+  REF:  i see that the volume of the water is forty millimeters
+  PRED: i see that the volume of the water is forty millimeters
+
