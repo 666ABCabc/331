@@ -2,6 +2,21 @@
 
 Runtime: A100 80GB, 24 vCPU, 220GB RAM, 2-hour limit, no network.
 """
+### The purpose of submitting the relevant code files 1. orthographic_submission/main.py - Inference script
+Core function: Executes speech recognition inference and generates submission files 
+- Model loading: Load the pre-trained Whisper-v3-turbo model
+- Data processing:
+- Sort by audio length (to optimize batch processing efficiency)
+- Batch load audio files (using a robust audio loading function)
+- Feature extraction and model inference
+- Inference optimization:
+- Batch processing (BATCH_SIZE = 32)
+- Mixed-precision inference (bfloat16)
+- GPU acceleration
+- Result generation:
+- Generate submission files in the DrivenData format
+- Handle missing audio cases (return silence) 2. pack_submission.py - Packaging script
+Core function: Package the inference code and model into a submitable zip file 
 
 import json
 import os
