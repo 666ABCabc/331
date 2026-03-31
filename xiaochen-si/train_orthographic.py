@@ -1,12 +1,20 @@
-"""
-训练脚本：基于 Parakeet-TDT-0.6B 的 NeMo Adapter 微调
-用于 DrivenData 儿童语音识别挑战赛 - Word Track
 
-用法:
+"""
+Training script: NeMo Adapter fine-tuning based on Parakeet-TDT-0.6B
+for DrivenData Children's Speech Recognition Challenge - Word Track
+
+Usage:
     python train_orthographic.py [--sample N] [--max-steps N] [--batch-size N] [--devices N] [--num-workers N]
 
-在云GPU服务器上运行:
+Run on cloud GPU server:
     python train_orthographic.py --max-steps 5000 --batch-size 32 --devices 1
+
+Core innovations:
+1. Parameter-efficient fine-tuning using NeMo Adapters
+2. Adapter architecture for targeted model adaptation
+3. Multi-corpus training with DrivenData and TalkBank data
+4. Spec augmentation for robustness improvement
+5. Efficient batch processing and mixed precision training
 """
 
 import argparse
@@ -64,13 +72,21 @@ def read_transcripts(data_dir: Path) -> pd.DataFrame:
 
 
 def prepare_data(args):
-    """Load data, create NeMo manifests, and split into train/val."""
+    """Load and prepare training data from multiple corpora.
+    
+    Args:
+        args: Command-line arguments with data configuration
+        
+    Returns:
+        Tuple of (train_manifest_path, val_manifest_path) for NeMo training
+    """
+    # Create output directory for manifests
     manifest_dir = DATA_ROOT / "processed" / "ortho_dataset"
     train_manifest_path = manifest_dir / "train_manifest.jsonl"
     val_manifest_path = manifest_dir / "val_manifest.jsonl"
     manifest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load both corpora
+    # Load both DrivenData and TalkBank corpora
     df_dd = read_transcripts(DATA_ROOT / "raw" / "drivendata")
     df_tb = read_transcripts(DATA_ROOT / "raw" / "talkbank")
     df = pd.concat([df_dd, df_tb], ignore_index=True)
@@ -81,11 +97,12 @@ def prepare_data(args):
             "and place them in data/raw/drivendata/ and data/raw/talkbank/"
         )
 
+    # Log data statistics
     logger.info(f"Total utterances: {len(df)}")
     logger.info(f"Unique children: {df.child_id.nunique()}")
     logger.info(f"Total audio hours: {df.audio_duration_sec.sum() / 3600:.1f}")
 
-    # Convert to NeMo manifest format
+    # Convert to NeMo manifest format (required by NeMo ASR)
     df = df[["audio_path", "audio_duration_sec", "orthographic_text"]].rename(
         columns={
             "audio_path": "audio_filepath",
@@ -94,18 +111,21 @@ def prepare_data(args):
         }
     )
 
-    # Remove long clips
+    # Remove long audio clips to avoid memory issues
     over_max = df["duration"] > args.clip_max_duration
     logger.info(f"Removing {over_max.sum()} samples with duration > {args.clip_max_duration}s")
     df = df[~over_max]
 
+    # Sample data for quick testing if specified
     if args.sample:
         logger.info(f"Sampling {args.sample} utterances for quick testing")
         df = df.sample(args.sample, random_state=10)
 
+    # Split data into training (80%) and validation (20%) sets
     train_df, val_df = train_test_split(df, test_size=0.2, random_state=10)
     logger.info(f"Train: {len(train_df)}, Val: {len(val_df)}")
 
+    # Save manifests in JSONL format
     train_df.to_json(train_manifest_path, orient="records", lines=True)
     val_df.to_json(val_manifest_path, orient="records", lines=True)
 
@@ -113,22 +133,32 @@ def prepare_data(args):
 
 
 def train(args, train_manifest_path, val_manifest_path):
-    """Run adapter training."""
+    """Run NeMo Adapter training for children's speech recognition.
+    
+    Args:
+        args: Command-line arguments with training configuration
+        train_manifest_path: Path to training manifest file
+        val_manifest_path: Path to validation manifest file
+        
+    Returns:
+        Tuple of (exp_log_dir, cfg) - experiment directory and configuration
+    """
+    # Set high precision for matrix multiplications
     torch.set_float32_matmul_precision("high")
 
-    # Load NeMo adapter defaults
+    # Load NeMo adapter configuration defaults
     yaml_path = PROJECT_ROOT / "asr_benchmark" / "assets" / "asr_adaptation.yaml"
     cfg = OmegaConf.load(yaml_path)
 
-    # Training overrides
+    # Override configuration with command-line arguments
     overrides = OmegaConf.create(
         {
             "model": {
-                "pretrained_model": "nvidia/parakeet-tdt-0.6b-v2",
+                "pretrained_model": "nvidia/parakeet-tdt-0.6b-v2",  # Base model
                 "adapter": {
-                    "adapter_name": "asr_children_orthographic",
-                    "adapter_module_name": "encoder",
-                    "linear": {"in_features": 1024},
+                    "adapter_name": "asr_children_orthographic",  # Adapter name
+                    "adapter_module_name": "encoder",  # Target module for adaptation
+                    "linear": {"in_features": 1024},  # Adapter configuration
                 },
                 "train_ds": {
                     "manifest_filepath": str(train_manifest_path),
@@ -145,33 +175,34 @@ def train(args, train_manifest_path, val_manifest_path):
                     "channel_selector": "average",
                 },
                 "optim": {
-                    "lr": args.lr,
-                    "weight_decay": 0.0,
+                    "lr": args.lr,  # Learning rate
+                    "weight_decay": 0.0,  # No weight decay
                 },
             },
             "trainer": {
-                "devices": args.devices,
-                "precision": args.precision,
+                "devices": args.devices,  # Number of GPUs
+                "precision": args.precision,  # Mixed precision training
                 "strategy": "auto",
-                "max_epochs": 1 if args.sample else None,
-                "max_steps": -1 if args.sample else args.max_steps,
-                "val_check_interval": 1.0 if args.sample else args.val_check_interval,
+                "max_epochs": 1 if args.sample else None,  # Quick testing
+                "max_steps": -1 if args.sample else args.max_steps,  # Training steps
+                "val_check_interval": 1.0 if args.sample else args.val_check_interval,  # Validation interval
                 "enable_progress_bar": True,
             },
             "exp_manager": {
-                "exp_dir": str(PROJECT_ROOT / "models" / "orthographic_benchmark_nemo"),
+                "exp_dir": str(PROJECT_ROOT / "models" / "orthographic_benchmark_nemo"),  # Output directory
             },
         }
     )
 
+    # Merge configurations
     cfg = OmegaConf.merge(cfg, overrides)
 
-    # Define Trainer
+    # Setup PyTorch Lightning Trainer
     logger.info("Setting up Trainer...")
     trainer = pl.Trainer(**resolve_trainer_cfg(cfg.trainer))
     exp_log_dir = exp_manager(trainer, cfg.get("exp_manager", None))
 
-    # Load pretrained model with adapter support
+    # Load pretrained Parakeet model with adapter support
     logger.info("Loading pretrained model: nvidia/parakeet-tdt-0.6b-v2")
     model_cfg = ASRModel.from_pretrained(cfg.model.pretrained_model, return_config=True)
     update_model_config_to_support_adapter(model_cfg, cfg)
@@ -186,7 +217,7 @@ def train(args, train_manifest_path, val_manifest_path):
         model.cfg.decoding.greedy.use_cuda_graph_decoder = False
     model.change_decoding_strategy(model.cfg.decoding)
 
-    # Setup data
+    # Setup training and validation data
     cfg.model.train_ds = update_model_cfg(model.cfg.train_ds, cfg.model.train_ds)
     model.setup_training_data(cfg.model.train_ds)
 
@@ -196,14 +227,14 @@ def train(args, train_manifest_path, val_manifest_path):
     # Setup optimizer
     model.setup_optimization(cfg.model.optim)
 
-    # Configure spec augmentation
+    # Configure spec augmentation for robustness
     if "spec_augment" in cfg.model:
         model.spec_augmentation = model.from_config_dict(cfg.model.spec_augment)
     else:
         model.spec_augmentation = None
         del model.cfg.spec_augment
 
-    # Setup adapter
+    # Setup NeMo Adapter
     logger.info("Setting up adapter...")
     with open_dict(cfg.model.adapter):
         adapter_name = cfg.model.adapter.pop("adapter_name")
@@ -213,34 +244,40 @@ def train(args, train_manifest_path, val_manifest_path):
 
         adapter_type_cfg = cfg.model.adapter[adapter_type]
 
+        # Format adapter name with module
         if adapter_module_name is not None and ":" not in adapter_name:
             adapter_name = f"{adapter_module_name}:{adapter_name}"
 
+        # Add global adapter configuration if specified
         adapter_global_cfg = cfg.model.adapter.pop(model.adapter_global_cfg_key, None)
         if adapter_global_cfg is not None:
             add_global_adapter_cfg(model, adapter_global_cfg)
 
+    # Add adapter to model
     model.add_adapter(adapter_name, cfg=adapter_type_cfg)
     assert model.is_adapter_available()
 
+    # Enable only the adapter (freeze base model)
     model.set_enabled_adapters(enabled=False)
     model.set_enabled_adapters(adapter_name, enabled=True)
 
+    # Freeze base model and unfreeze only adapter layers
     model.freeze()
     model = model.train()
     model.unfreeze_enabled_adapters()
 
+    # Log parameter statistics
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Total parameters:     {total_params:,}")
     logger.info(f"Trainable parameters: {trainable_params:,} ({100 * trainable_params / total_params:.2f}%)")
 
-    # Train!
+    # Run training
     logger.info("Starting training...")
     trainer.fit(model)
     logger.success("Training complete!")
 
-    # Save adapter state dict
+    # Save adapter weights
     if adapter_state_dict_name is not None:
         state_path = exp_log_dir if exp_log_dir is not None else os.getcwd()
         ckpt_path = os.path.join(state_path, "checkpoints")
